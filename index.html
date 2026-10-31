@@ -75,11 +75,51 @@
   document.getElementById("local").onclick = () => fileInput.click();
   fileInput.onchange = () => { const f = fileInput.files[0]; if (f) load(f, 1, f.name); };
 
+  // Put the model 1 m in front of the headset, slightly below eye level
+  function placeInFront(xrCam) {
+    if (!current) return;
+    const fwd = xrCam.getDirection(BABYLON.Axis.Z);
+    fwd.y = 0; fwd.normalize();
+    current.position = xrCam.globalPosition.add(fwd.scale(1));
+    current.position.y = xrCam.globalPosition.y - 0.2;
+  }
+
   // "Enter AR" button: Quest, HoloLens 2 (Edge) and Android Chrome
-  scene.createDefaultXRExperienceAsync({
-    uiOptions: { sessionMode: "immersive-ar", referenceSpaceType: "local-floor" },
-    optionalFeatures: true                                 // hand tracking where available
-  });
+  (async () => {
+    const xr = await scene.createDefaultXRExperienceAsync({
+      uiOptions: { sessionMode: "immersive-ar", referenceSpaceType: "local-floor" },
+      optionalFeatures: true,                              // hand tracking where available
+      disableTeleportation: true                           // frees the thumbsticks (no more turning *you*)
+    });
+
+    // Thumbstick left/right spins the model around its own centre
+    const SPIN_SPEED = 1.5;                                // radians per second at full tilt (~90°/s)
+    const sticks = [];
+    xr.input.onControllerAddedObservable.add(ctrl => {
+      ctrl.onMotionControllerInitObservable.add(mc => {
+        const stick = mc.getComponent("xr-standard-thumbstick");
+        if (stick) sticks.push(stick);
+      });
+    });
+    xr.input.onControllerRemovedObservable.add(() => sticks.length = 0);
+    scene.onBeforeRenderObservable.add(() => {
+      if (!current) return;
+      const x = sticks.reduce((sum, s) => sum + s.axes.x, 0);
+      if (Math.abs(x) < 0.15) return;                      // dead zone so it doesn't drift
+      const { min, max } = current.getHierarchyBoundingVectors();
+      const centre = min.add(max).scale(0.5);
+      current.rotateAround(centre, BABYLON.Axis.Y, x * SPIN_SPEED * engine.getDeltaTime() / 1000);
+    });
+    xr.baseExperience.onStateChangedObservable.add(state => {
+      if (state !== BABYLON.WebXRState.IN_XR) return;
+      let frames = 0;                                      // wait ~half a second for tracking to settle
+      const obs = xr.baseExperience.sessionManager.onXRFrameObservable.add(() => {
+        if (++frames < 30) return;
+        placeInFront(xr.baseExperience.camera);
+        xr.baseExperience.sessionManager.onXRFrameObservable.remove(obs);
+      });
+    });
+  })();
 
   engine.runRenderLoop(() => scene.render());
   window.addEventListener("resize", () => engine.resize());
