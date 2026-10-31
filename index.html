@@ -4,39 +4,82 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Holo Test</title>
-  <style>html,body{margin:0;height:100%;overflow:hidden;background:#111}canvas{width:100%;height:100%;touch-action:none}</style>
+  <style>
+    html,body{margin:0;height:100%;overflow:hidden;background:#4a5a70;font-family:system-ui,sans-serif}
+    canvas{width:100%;height:100%;touch-action:none}
+    #ui{position:fixed;top:12px;left:12px;display:flex;flex-direction:column;gap:8px;
+        background:rgba(0,0,0,.6);color:#fff;padding:10px 12px;border-radius:10px;font-size:16px}
+    #ui select,#ui button{font-size:16px;padding:6px 8px}
+    #status{font-size:13px;opacity:.8}
+  </style>
   <script src="https://cdn.babylonjs.com/babylon.js"></script>
   <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
 </head>
 <body>
 <canvas id="c"></canvas>
+<div id="ui">
+  <label>Model:
+    <select id="pick"></select>
+  </label>
+  <button id="local">Load .glb from this device…</button>
+  <input id="file" type="file" accept=".glb" hidden>
+  <span id="status"></span>
+</div>
 <script>
-  const MODEL = "model.glb";   // your Blender export, in the same folder
-  const SCALE = 1;             // 1 Blender unit = 1 metre; change if it's too big/small
+  // ── Your models: add one line per .glb uploaded to this folder ──
+  const MODELS = [
+    { name: "My model", file: "model.glb", scale: 1 },
+    // { name: "Engine part", file: "engine.glb", scale: 0.1 },
+  ];
 
   const canvas = document.getElementById("c");
   const engine = new BABYLON.Engine(canvas, true);
   const scene = new BABYLON.Scene(engine);
   scene.clearColor = new BABYLON.Color4(0, 0, 0, 0);   // transparent so passthrough shows through
 
-  // Desktop preview camera (drag to orbit) + soft light
   const cam = new BABYLON.ArcRotateCamera("cam", -Math.PI / 2, Math.PI / 2.5, 3, new BABYLON.Vector3(0, 1.2, 1), scene);
   cam.attachControl(canvas, true);
   new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0, 1, 0), scene);
+  // Reflection lighting, so metallic Blender materials don't render pitch black
+  scene.createDefaultEnvironment({ createGround: false, createSkybox: false });
 
-  (async () => {
-    const { meshes } = await BABYLON.SceneLoader.ImportMeshAsync("", "./", MODEL, scene);
-    const root = meshes[0];
-    root.scaling.scaleInPlace(SCALE);
-    root.position = new BABYLON.Vector3(0, 1.2, 1);      // chest height, 1 m in front of you
-    root.addBehavior(new BABYLON.SixDofDragBehavior());  // grab & move with hands or controllers
+  const pick = document.getElementById("pick");
+  const fileInput = document.getElementById("file");
+  const status = document.getElementById("status");
+  let current = null;
 
-    // Adds the "Enter AR" button; works on Quest, HoloLens 2 (Edge) and Android Chrome
-    await scene.createDefaultXRExperienceAsync({
-      uiOptions: { sessionMode: "immersive-ar", referenceSpaceType: "local-floor" },
-      optionalFeatures: true                             // turns on hand tracking where available
-    });
-  })();
+  async function load(source, scale = 1, label = "") {
+    status.textContent = "Loading " + label + "…";
+    try {
+      if (current) current.dispose(false, true);           // remove previous model + its textures
+      const { meshes } = (typeof source === "string")
+        ? await BABYLON.SceneLoader.ImportMeshAsync("", "./", source, scene)
+        : await BABYLON.SceneLoader.ImportMeshAsync("", "", source, scene, null, ".glb");
+      current = meshes[0];
+      current.scaling.scaleInPlace(scale);
+      current.position = new BABYLON.Vector3(0, 1.2, 1);  // chest height, 1 m in front of you
+      current.addBehavior(new BABYLON.SixDofDragBehavior()); // grab & move with hands/controllers
+      status.textContent = label + " loaded";
+    } catch (e) {
+      status.textContent = "Couldn't load " + label + " (check the file name)";
+      console.error(e);
+    }
+  }
+
+  // Fill the dropdown and load the first model
+  MODELS.forEach((m, i) => pick.add(new Option(m.name, i)));
+  pick.onchange = () => { const m = MODELS[pick.value]; load(m.file, m.scale, m.name); };
+  pick.onchange();
+
+  // Local file: stays on the device, never uploaded
+  document.getElementById("local").onclick = () => fileInput.click();
+  fileInput.onchange = () => { const f = fileInput.files[0]; if (f) load(f, 1, f.name); };
+
+  // "Enter AR" button: Quest, HoloLens 2 (Edge) and Android Chrome
+  scene.createDefaultXRExperienceAsync({
+    uiOptions: { sessionMode: "immersive-ar", referenceSpaceType: "local-floor" },
+    optionalFeatures: true                                 // hand tracking where available
+  });
 
   engine.runRenderLoop(() => scene.render());
   window.addEventListener("resize", () => engine.resize());
